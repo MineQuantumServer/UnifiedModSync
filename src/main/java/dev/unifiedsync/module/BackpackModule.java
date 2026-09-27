@@ -18,7 +18,31 @@ public final class BackpackModule implements SyncModule {
   private final Config config;
   private Class<?> item, consumer;
   private Method from, uuid, handler, refresh, getStorage, getContents, setContents, provider, run;
-  private final Map<UUID, Set<Object>> wrappers = new HashMap<>();
+  private Method upgrades, renderUpgrades, firstUpgradeSlot;
+  private Class<?> backpackMenu;
+  private Field upgradeSlots;
+  private final Map<UUID, ScanContext> scans = new HashMap<>();
+
+  // Server-thread confined. Reuse scratch collections, never reuse a scan's observations.
+  private final class ScanContext {
+    final Set<ResourceKey> keys = new HashSet<>();
+    final Set<ItemStack> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+    final Set<UUID> path = new HashSet<>();
+    final Map<UUID, ResourceKey> resources = new HashMap<>();
+    final Map<UUID, Set<Object>> wrappers = new HashMap<>();
+    Set<ResourceKey> loaded, result = Set.of();
+    final Object callback =
+        Proxy.newProxyInstance(
+            consumer.getClassLoader(),
+            new Class<?>[] {consumer},
+            (o, m, a) -> {
+              if (m.getName().equals("accept")) {
+                scan((ItemStack) a[0], 0, this);
+                return false;
+              }
+              return null;
+            });
+  }
 
   public BackpackModule(Config config) {
     this.config = config;
@@ -47,6 +71,13 @@ public final class BackpackModule implements SyncModule {
     uuid = w.getMethod("getContentsUuid");
     handler = w.getMethod("getInventoryHandler");
     refresh = w.getMethod("onContentsNbtUpdated");
+    upgrades = w.getMethod("getUpgradeHandler");
+    renderUpgrades =
+        Class.forName("net.p3pp3rf1y.sophisticatedcore.upgrades.UpgradeHandler")
+            .getMethod("setRenderUpgradeItems");
+    backpackMenu = Class.forName(b + "common.gui.BackpackContainer");
+    firstUpgradeSlot = backpackMenu.getMethod("getFirstUpgradeSlot");
+    upgradeSlots = backpackMenu.getField("upgradeSlots");
     getStorage = s.getMethod("get");
     getContents = s.getMethod("getBackpackContents", UUID.class);
     setContents = s.getMethod("setBackpackContents", UUID.class, CompoundTag.class);
@@ -65,37 +96,38 @@ public final class BackpackModule implements SyncModule {
   }
 
   public Set<ResourceKey> discover(ServerPlayer p, Set<ResourceKey> loaded) throws Exception {
-    Set<ResourceKey> result = new TreeSet<>();
-    Set<ItemStack> visited = Collections.newSetFromMap(new IdentityHashMap<>());
-    var proxy =
-        Proxy.newProxyInstance(
-            consumer.getClassLoader(),
-            new Class<?>[] {consumer},
-            (o, m, a) -> {
-              if (m.getName().equals("accept")) {
-                scan((ItemStack) a[0], 0, result, visited, new HashSet<>(), loaded);
-                return false;
-              }
-              return null;
-            });
-    run.invoke(provider.invoke(null), p, proxy);
-    for (int i = 0; i < p.getInventory().getContainerSize(); i++)
-      scan(p.getInventory().getItem(i), 0, result, visited, new HashSet<>(), loaded);
-    for (int i = 0; i < p.getEnderChestInventory().getContainerSize(); i++)
-      scan(p.getEnderChestInventory().getItem(i), 0, result, visited, new HashSet<>(), loaded);
-    scan(p.containerMenu.getCarried(), 0, result, visited, new HashSet<>(), loaded);
-    return result;
+    ScanContext c = scans.computeIfAbsent(p.getUUID(), ignored -> new ScanContext());
+    c.loaded = loaded;
+    try {
+      run.invoke(provider.invoke(null), p, c.callback);
+      for (int i = 0; i < p.getInventory().getContainerSize(); i++)
+        scan(p.getInventory().getItem(i), 0, c);
+      for (int i = 0; i < p.getEnderChestInventory().getContainerSize(); i++)
+        scan(p.getEnderChestInventory().getItem(i), 0, c);
+      scan(p.containerMenu.getCarried(), 0, c);
+      if (!c.result.equals(c.keys)) c.result = Set.copyOf(c.keys);
+      c.resources.values().retainAll(c.keys);
+      c.wrappers.keySet().retainAll(c.resources.keySet());
+      return c.result;
+    } finally {
+      c.keys.clear();
+      c.visited.clear();
+      c.path.clear();
+      c.loaded = null;
+    }
+  }
+
+  @Override
+  public void detached(ServerPlayer p) {
+    scans.remove(p.getUUID());
   }
 
   @SuppressWarnings("unchecked")
-  private void scan(
-      ItemStack stack,
-      int depth,
-      Set<ResourceKey> keys,
-      Set<ItemStack> visited,
-      Set<UUID> path,
-      Set<ResourceKey> loaded)
-      throws Exception {
+  private void scan(ItemStack stack, int depth, ScanContext c) throws Exception {
+    Set<ResourceKey> keys = c.keys;
+    Set<ItemStack> visited = c.visited;
+    Set<UUID> path = c.path;
+    Set<ResourceKey> loaded = c.loaded;
     if (stack.isEmpty() || !visited.add(stack)) return;
     if (depth > config.maxDepth())
       throw new IllegalStateException("Backpack nesting exceeds configured limit");
@@ -111,24 +143,42 @@ public final class BackpackModule implements SyncModule {
       if (opt.isEmpty()) throw new IllegalStateException("Backpack has no contents UUID");
       UUID id = opt.get();
       if (!path.add(id)) throw new IllegalStateException("Cyclic nested backpack UUID " + id);
-      var key = new ResourceKey(id(), id.toString());
+      var key = c.resources.computeIfAbsent(id, value -> new ResourceKey(id(), value.toString()));
       // Same stack exposed by multiple providers is filtered above; distinct shells sharing an UUID
       // are suspicious.
       if (!keys.add(key)) throw new IllegalStateException("Duplicate backpack UUID " + id);
       if (keys.size() > config.maxBags()) throw new IllegalStateException("Too many backpacks");
-      wrappers.computeIfAbsent(id, k -> Collections.newSetFromMap(new WeakHashMap<>())).add(w);
+      c.wrappers.computeIfAbsent(id, k -> Collections.newSetFromMap(new WeakHashMap<>())).add(w);
       if ((loaded == null || loaded.contains(key)) && local(id).isPresent()) {
         IItemHandler inv = (IItemHandler) handler.invoke(w);
-        for (int i = 0; i < inv.getSlots(); i++)
-          scan(inv.getStackInSlot(i), depth + 1, keys, visited, path, loaded);
+        for (int i = 0; i < inv.getSlots(); i++) scan(inv.getStackInSlot(i), depth + 1, c);
       }
       path.remove(id);
     } else {
-      ItemContainerContents c = stack.get(DataComponents.CONTAINER);
-      if (c != null)
-        for (ItemStack child : c.nonEmptyItems())
-          scan(child, depth + 1, keys, visited, path, loaded);
+      ItemContainerContents contents = stack.get(DataComponents.CONTAINER);
+      if (contents != null)
+        for (ItemStack child : contents.nonEmptyItems()) scan(child, depth + 1, c);
     }
+  }
+
+  @Override
+  public void containerOpened(
+      ServerPlayer p, net.minecraft.world.inventory.AbstractContainerMenu menu) throws Exception {
+    if (!backpackMenu.isInstance(menu)) return;
+    // Upgrade slots live outside vanilla menu.slots. Send explicit updates after menu init so
+    // hybrid-server inventory synchronization cannot omit them from the initial contents packet.
+    int first = (int) firstUpgradeSlot.invoke(menu);
+    var slots = (java.util.List<net.minecraft.world.inventory.Slot>) upgradeSlots.get(menu);
+    for (int i = 0; i < slots.size(); i++) {
+      p.connection.send(
+          new net.minecraft.network.protocol.game.ClientboundContainerSetSlotPacket(
+              menu.containerId, menu.incrementStateId(), first + i, slots.get(i).getItem().copy()));
+    }
+  }
+
+  @Override
+  public void activated(ServerPlayer p) {
+    p.inventoryMenu.broadcastFullState();
   }
 
   public Map<ResourceKey, byte[]> capture(ServerPlayer p, Set<ResourceKey> keys) throws Exception {
@@ -176,7 +226,14 @@ public final class BackpackModule implements SyncModule {
         existing.merge(replacement);
       } else setContents.invoke(storage, id, replacement);
       ((SavedData) storage).setDirty();
-      for (Object wrapper : wrappers.getOrDefault(id, Set.of())) refresh.invoke(wrapper);
+      for (ScanContext context : scans.values()) {
+        for (Object wrapper : context.wrappers.getOrDefault(id, Set.of())) {
+          refresh.invoke(wrapper);
+          // Loading NBT does not fire onContentsChanged. Rebuild the shell's upgrade render data
+          // explicitly, including when slot count is unchanged, before the inventory full sync.
+          renderUpgrades.invoke(upgrades.invoke(wrapper));
+        }
+      }
     }
   }
 }

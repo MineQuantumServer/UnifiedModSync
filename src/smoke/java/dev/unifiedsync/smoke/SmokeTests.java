@@ -26,6 +26,10 @@ import net.neoforged.neoforge.items.IItemHandlerModifiable;
 @PrefixGameTestTemplate(false)
 public class SmokeTests {
   private static ServerPlayer player(GameTestHelper h, String name) {
+    return player(h, name, new ArrayList<>());
+  }
+
+  private static ServerPlayer player(GameTestHelper h, String name, List<Packet<?>> sent) {
     var profile = new GameProfile(UUID.randomUUID(), name);
     var p =
         new ServerPlayer(
@@ -41,17 +45,22 @@ public class SmokeTests {
         new ServerGamePacketListenerImpl(
             h.getLevel().getServer(), c, p, CommonListenerCookie.createInitial(profile, false)) {
           @Override
-          public void send(Packet<?> packet) {}
+          public void send(Packet<?> packet) {
+            sent.add(packet);
+          }
 
           @Override
-          public void send(Packet<?> packet, PacketSendListener listener) {}
+          public void send(Packet<?> packet, PacketSendListener listener) {
+            sent.add(packet);
+          }
         };
     return p;
   }
 
   @GameTest(template = "empty", timeoutTicks = 4000)
   public static void moduleRoundtripAndProtection(GameTestHelper h) throws Exception {
-    ServerPlayer p = player(h, "ModuleTest");
+    List<Packet<?>> sent = new ArrayList<>();
+    ServerPlayer p = player(h, "ModuleTest", sent);
     Coordinator service = UnifiedSync.service();
     h.assertTrue(
         service != null && service.moduleIds().size() == 3,
@@ -88,7 +97,48 @@ public class SmokeTests {
     bags.verify();
     Set<ResourceKey> ids = bags.discover(p);
     h.assertTrue(ids.size() == 1, "Discover one UUID");
+    var allocationBean =
+        (com.sun.management.ThreadMXBean) java.lang.management.ManagementFactory.getThreadMXBean();
+    for (int i = 0; i < 2000; i++) bags.discover(p, ids);
+    long allocatedBefore =
+        allocationBean.getThreadAllocatedBytes(Thread.currentThread().threadId());
+    for (int i = 0; i < 10000; i++) bags.discover(p, ids);
+    long allocated =
+        allocationBean.getThreadAllocatedBytes(Thread.currentThread().threadId()) - allocatedBefore;
+    System.out.println("UMS_DISCOVER_BENCH bytes/scan=" + allocated / 10000);
+    Item upgradeItem =
+        BuiltInRegistries.ITEM.get(ResourceLocation.parse("sophisticatedbackpacks:pickup_upgrade"));
+    h.assertTrue(upgradeItem != Items.AIR, "Upgrade test item missing");
+    var upgradeHandler = (IItemHandlerModifiable) wrapper.getMethod("getUpgradeHandler").invoke(w);
+    upgradeHandler.setStackInSlot(0, new ItemStack(upgradeItem));
     var saved = bags.capture(p, ids);
+    upgradeHandler.setStackInSlot(0, ItemStack.EMPTY);
+    // Same slot count, stale empty render metadata: mirrors a shell restored by inventory sync.
+    bags.apply(p, saved);
+    Object renderInfo = wrapper.getMethod("getRenderInfo").invoke(w);
+    var renderedUpgrades =
+        (java.util.List<ItemStack>)
+            renderInfo.getClass().getMethod("getUpgradeItems").invoke(renderInfo);
+    h.assertTrue(
+        !renderedUpgrades.isEmpty() && renderedUpgrades.get(0).is(upgradeItem),
+        "Loaded upgrades must refresh render metadata without a click");
+    var restoredUpgrades =
+        (IItemHandlerModifiable) wrapper.getMethod("getUpgradeHandler").invoke(w);
+    h.assertTrue(
+        restoredUpgrades.getStackInSlot(0).is(upgradeItem), "Upgrade contents not restored");
+    // Repeated checks within one tick must still detect a new duplicate shell.
+    p.getInventory().setItem(1, stack.copy());
+    boolean duplicateRejected = false;
+    try {
+      bags.discover(p, ids);
+    } catch (Exception expected) {
+      duplicateRejected = true;
+    }
+    h.assertTrue(duplicateRejected, "Cached discovery missed a same-tick duplicate");
+    p.getInventory().setItem(1, ItemStack.EMPTY);
+    h.assertTrue(bags.discover(p, ids).equals(ids), "Failed scan polluted scratch state");
+    bags.detached(p);
+    h.assertTrue(bags.discover(p, ids).equals(ids), "Detached player cannot rediscover bags");
     CompoundTag invalid = NbtBytes.decode(saved.values().iterator().next());
     invalid
         .getCompound("inventory")
@@ -120,6 +170,31 @@ public class SmokeTests {
         inv.getStackInSlot(0).is(Items.DIAMOND) && inv.getStackInSlot(0).getCount() == 7,
         "Backpack cache was not refreshed");
     h.assertTrue(!contents.contains("ums_stale_key"), "Load merged instead of replacing NBT");
+    Class<?> contextType =
+        Class.forName("net.p3pp3rf1y.sophisticatedbackpacks.common.gui.BackpackContext");
+    Object context =
+        Class.forName(contextType.getName() + "$Item")
+            .getConstructor(String.class, int.class)
+            .newInstance("main", 0);
+    var menu =
+        (net.minecraft.world.inventory.AbstractContainerMenu)
+            Class.forName("net.p3pp3rf1y.sophisticatedbackpacks.common.gui.BackpackContainer")
+                .getConstructor(
+                    int.class, net.minecraft.world.entity.player.Player.class, contextType)
+                .newInstance(7, p, context);
+    int firstUpgrade = (int) menu.getClass().getMethod("getFirstUpgradeSlot").invoke(menu);
+    sent.clear();
+    bags.containerOpened(p, menu);
+    h.assertTrue(
+        sent.stream()
+            .anyMatch(
+                packet ->
+                    packet instanceof ClientboundContainerSetSlotPacket slot
+                        && slot.getContainerId() == 7
+                        && slot.getSlot() == firstUpgrade
+                        && slot.getItem().is(upgradeItem)),
+        "Menu open must explicitly send restored upgrade slots");
+    menu.removed(p);
     service.join(p);
     h.assertTrue(UnifiedSync.protectedPlayer(p), "Join must start protected");
     Vec3 old = p.position();

@@ -1,11 +1,11 @@
-# Unified Mod Sync 1.0.1
+# Unified Mod Sync 1.0.2
 
 服务端 NeoForge 1.21.1 统一同步模组。首批模块：精妙背包内容、时装工坊衣柜、星辉研究和天赋进度。MySQL 必需，Redis 可选。放入 `mods`，不是 `plugins`；客户端不需要安装这个同步模组。
 
 ## 安装与配置
 
 1. 各子服使用同一套玩家 UUID 体系、模组版本、注册表和相关模组配置。数据库先创建一个空库，例如 `CREATE DATABASE unified_sync CHARACTER SET utf8mb4;`。账号需要该库的建表、查询、插入、更新、删除及升级表结构权限。
-2. 放入 `unified-mod-sync-neoforge-1.21.1-1.0.1.jar`。删除之前单独的 Astral Sync。停用 AWWardrobeSync；YouerModSync 可以保留其他功能，但必须关闭 `modules.sophisticatedbackpacks`。
+2. 放入 `unified-mod-sync-neoforge-1.21.1-1.0.2.jar`。删除之前单独的 Astral Sync。停用 AWWardrobeSync；YouerModSync 可以保留其他功能，但必须关闭 `modules.sophisticatedbackpacks`。
 3. 启动一次后自动生成 `config/unified-mod-sync.properties`。首次默认 `enabled=false`。正常情况下不用手动创建；也可以复制发行包的示例配置到上述位置。
 4. 停服，填写 MySQL 配置，设置 `enabled=true`。所有子服使用相同 `sync-group`，`server-id` 各不相同。只用 MySQL 时保留 `redis.enabled=false`，不需要 Redis 服务，也不需要额外放 JDBC/Jedis JAR。
 5. 与本次提供的 KTG4 + NMS 插件配合，建议 `ktg-mode=required`，`join-delay-seconds=5`。模组同时等待延迟和 KTG4 的 `Work.isLoaded()`，不是仅等待固定秒数。

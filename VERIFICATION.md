@@ -1,5 +1,17 @@
 # 验证记录
 
+## 1.0.2 优化与升级显示验证
+
+日期：2026-09-27。本地测试，没有操作正式服务器或生产数据库。
+
+本次通过 `build runSmoke`、`test -Pintegration --rerun-tasks` 和最终 JAR 的独立 `verification/packaged runSmoke`。9 个 JUnit 用例全部通过、无跳过；开发环境和最终 JAR 各 3 个 GameTest 全部通过。开发 GameTest 使用 MySQL-only，最终 JAR 测试使用 MySQL + fakeredis TCP 兼容服务，并额外加入父层 MySQL Connector/J 8.4.0，检查隔离打包兼容性；这不是实际 Redis 集群测试。
+
+分配对比使用同一真实 NeoForge GameTest 环境：一个普通背包、7 个钻石、相同已加载资源集合，预热 2,000 次后连续发现 10,000 次，通过 ThreadMXBean 读取服务器线程分配字节。1.0.1 基线为 9,824 字节/次，优化后两次开发运行为 2,312 和 1,982 字节/次，约降低 76%～80%。这是简化场景的扫描路径数据，受 JIT 等因素影响，不代表线上整个模组的分配率或常驻内存下降同样比例。用户报告中的 503.05 MiB 是 90 秒累计分配估计，也不是常驻内存。
+
+背包回归增加了：保存拾取升级、清空槽位形成过期显示信息、重新加载后无需点击即可恢复升级内容和显示元数据；创建真实 BackpackContainer，确认发送正确窗口 ID、升级槽索引及物品的 ClientboundContainerSetSlotPacket。仍检测同一 tick 内新出现的重复 UUID；失败后可再次发现，清理玩家缓存后可重新发现。嵌套父记录优先加载及损坏数据保护测试继续运行。
+
+这些是服务端状态和数据包验证，未运行真实客户端 GUI。升级槽与原版槽位分开存放的实现已核对，新增显式槽位更新作为兼容处理；尚不能认定用户完整 Youer 环境中的唯一根因。验收时携带多个升级从 A 服切换到 B 服，首次打开背包、不点击升级槽，检查图标、升级设置和实际功能，并测试再次切服与回档。
+
 ## 1.0.1 修复验证
 
 针对用户日志 `KtgGate.ready: argument type mismatch`，核对提供的 KTG4 JAR 反编译代码：`Work` 同时公开 `isLoaded(Go4Player)` 和 `isLoaded(PlayerStatus)`。修复后精确匹配 Go4Player 参数，不依赖反射枚举顺序。

@@ -464,6 +464,23 @@ public final class Coordinator implements AutoCloseable {
     }
   }
 
+  public void containerOpened(
+      ServerPlayer p, net.minecraft.world.inventory.AbstractContainerMenu menu) {
+    if (!active() || p instanceof FakePlayer) return;
+    if (!beforeAction(p)) {
+      p.closeContainer();
+      return;
+    }
+    Session s = session(p.getUUID());
+    if (s == null || s.state != State.READY || p.containerMenu != menu) return;
+    try {
+      for (SyncModule module : modules.values()) module.containerOpened(p, menu);
+    } catch (Exception e) {
+      p.closeContainer();
+      fail(s, e);
+    }
+  }
+
   public void externalPlayerLoad(ServerPlayer p) {
     Session s = session(p.getUUID());
     if (s != null

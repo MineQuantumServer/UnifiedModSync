@@ -29,5 +29,10 @@ public interface SyncModule {
   /** Called after protection is lifted, so client refresh requests are no longer blocked. */
   default void activated(ServerPlayer player) throws Exception {}
 
+  /** Called after the server opens a menu, with a ready and lease-checked session. */
+  default void containerOpened(
+      ServerPlayer player, net.minecraft.world.inventory.AbstractContainerMenu menu)
+      throws Exception {}
+
   default void detached(ServerPlayer player) throws Exception {}
 }

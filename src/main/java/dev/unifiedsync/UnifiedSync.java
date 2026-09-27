@@ -45,6 +45,7 @@ public final class UnifiedSync {
     NeoForge.EVENT_BUS.addListener(EventPriority.HIGHEST, this::join);
     NeoForge.EVENT_BUS.addListener(EventPriority.LOWEST, this::logout);
     NeoForge.EVENT_BUS.addListener(this::clonePlayer);
+    NeoForge.EVENT_BUS.addListener(EventPriority.LOWEST, this::containerOpened);
     NeoForge.EVENT_BUS.addListener(this::commands);
     NeoForge.EVENT_BUS.addListener(EventPriority.HIGHEST, this::command);
     NeoForge.EVENT_BUS.addListener(EventPriority.HIGHEST, this::damage);
@@ -101,6 +102,11 @@ public final class UnifiedSync {
 
   private void logout(PlayerEvent.PlayerLoggedOutEvent e) {
     if (coordinator != null && e.getEntity() instanceof ServerPlayer p) coordinator.logout(p);
+  }
+
+  private void containerOpened(PlayerContainerEvent.Open e) {
+    if (coordinator != null && e.getEntity() instanceof ServerPlayer p)
+      coordinator.containerOpened(p, e.getContainer());
   }
 
   private void clonePlayer(PlayerEvent.Clone e) {
