@@ -24,7 +24,7 @@ gradlew.bat build
 ./gradlew build
 ```
 
-将 `build/libs/unified-mod-sync-neoforge-1.21.1-1.0.0.jar` 放入服务端 `mods`，不要使用 `unshaded-dev-only` JAR。客户端无需安装本同步模组。
+将 `build/libs/unified-mod-sync-neoforge-1.21.1-1.0.1.jar` 放入服务端 `mods`，不要使用 `unshaded-dev-only` JAR。客户端无需安装本同步模组。
 
 首次启动会生成 `config/unified-mod-sync.properties`。填写数据库配置并设置 `enabled=true` 后重启。更换旧同步方案前，请先阅读数据迁移说明。
 

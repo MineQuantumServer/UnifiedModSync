@@ -63,9 +63,8 @@ public final class KtgGate {
     Object bp = bukkit.getMethod("getPlayer", java.util.UUID.class).invoke(null, player.getUUID());
     if (bp == null || work == null) return false;
     Object gp = adapter.getConstructor(find("org.bukkit.entity.Player")).newInstance(bp);
-    for (Method m : work.getClass().getMethods())
-      if (m.getName().equals("isLoaded") && m.getParameterCount() == 1)
-        return (boolean) m.invoke(work, gp);
-    throw new NoSuchMethodException("KTG4 Work.isLoaded");
+    Class<?> playerContract =
+        Class.forName("cn.jja8.knapsackToGo4.all.work.Go4Player", true, loader);
+    return KtgReadiness.isLoaded(work, gp, playerContract);
   }
 }

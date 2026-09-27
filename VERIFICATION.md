@@ -1,5 +1,11 @@
 # 验证记录
 
+## 1.0.1 修复验证
+
+针对用户日志 `KtgGate.ready: argument type mismatch`，核对提供的 KTG4 JAR 反编译代码：`Work` 同时公开 `isLoaded(Go4Player)` 和 `isLoaded(PlayerStatus)`。修复后精确匹配 Go4Player 参数，不依赖反射枚举顺序。
+
+本次运行 `gradlew.bat build`，包含 4 个新的 KTG4 反射回归用例及快照格式测试。未重新启动数据库集成测试或完整 GameTest，也未宣称已在实际 Youer + KTG4 服务端联测。以下数据库和 GameTest 记录为 1.0.0 的既有验证记录。
+
 日期：2026-09-27。未部署到用户正式服务器，也没有连接用户生产数据库。
 
 ## 已通过
