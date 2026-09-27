@@ -1,0 +1,13 @@
+.gradle/
+build/
+run/
+.idea/
+*.iml
+config/astral-sync.properties
+config/unified-mod-sync.properties
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+*.log

@@ -1,0 +1,44 @@
+# 验证记录
+
+日期：2026-09-27。未部署到用户正式服务器，也没有连接用户生产数据库。
+
+## 已通过
+
+- Java 21 / NeoForge 21.1.251 编译、单元测试与 Shadow 构建。
+- 4 个 JUnit 用例，0 失败、0 跳过。数据库为本地真实 MySQL 8.4.9：
+  - 快照格式、截断数据、SHA-256 损坏检测。
+  - 玩家锁冲突、背包 UUID 锁冲突、跨玩家交接、旧 token 写入拒绝。
+  - 多资源保存中途失败整笔回滚，备份数量清理。
+  - all 回档使用同批检查点，单模块保存不污染整组回档时间点。
+  - 数据库时钟租约过期后拒绝续租、拒绝保存。
+  - Redis token 校验、错误 token 无法续租/释放。
+- 3 个 NeoForge GameTest，使用真实 AW、SB、Core、Astral JAR：
+  - 三个模块编解码；背包恢复清除旧键、刷新 wrapper 缓存；未知物品注册 ID 在应用前被拒绝；保护时拒绝移动和切换物品栏槽位；异步加载、保存、单模块回档、延迟离服清理。
+  - 故意破坏 MySQL 中的星辉快照：玩家进入 ERROR 并保持保护，备份回档后重新加载全部模块恢复 READY；管理解除保护进入 BYPASS。
+  - 本地外层背包错误引用一个已被其他会话锁住的内层背包：先读取数据库权威父记录，再发现正确的内层 UUID，避免扫描旧本地引用造成错误锁冲突。
+- 最终打包 JAR 的独立 GameTest 启动：同样 3 项通过。此测试额外在父层加入 MySQL Connector/J 8.4.0，同时使用模组内隔离的 Connector/J 9.2.0，未发生重复 `mysql.connector.j` 模块错误。
+- 开发 GameTest 使用 MySQL-only；最终打包测试开启 Redis。Redis 端点为本地 fakeredis TCP 兼容服务器，**不是实际 Redis 发行版/集群测试**。
+- 旧数据迁移脚本：测试三个来源格式、gzip 解压、dry-run 不写入、重复执行不覆盖已有目标记录。
+- 发行 JAR 检查：无顶层/多版本 module-info.class、无原始 com/mysql 类路径、无 smoke 测试模组；Automatic-Module-Name 为 dev.unifiedsync。
+
+## 验证环境
+
+| 组件 | 版本 |
+| --- | --- |
+| Java | Dragonwell 21.0.11 |
+| NeoForge | 21.1.251 |
+| Armourer's Workshop | 3.4.0-beta.3 |
+| Sophisticated Backpacks | 3.26.3.2158 |
+| Sophisticated Core | 1.5.1.2341 |
+| Astral Sorcery | 文件版本 2.0.0.4 |
+| Curios | 9.5.1+1.21.1 |
+| ObserverLib | 1.10.3.31 |
+| MySQL | 8.4.9 |
+
+## 尚未完成的环境验收
+
+没有在用户完整 Youer 插件服上进行真实客户端双服联测。KTG4/NMS 桥接依据用户提供 JAR 的实际接口和反编译时序；不代表已运行这两款插件的全部流程。
+
+未模拟整个服务器进程突然断电、真实 Redis 网络分区、全部升级物品/饰品整合、其他插件直接改写对象、世界机器远程访问背包、完整整合包 GUI 的所有自定义消息。
+
+保护与事务用于收紧同步窗口，不能让 KTG4 与另一套数据库的提交自动成为一笔分布式事务。请按 README 的验收流程在服务器副本中测试后使用。

@@ -1,0 +1,26 @@
+modLoader="javafml"
+loaderVersion="[4,)"
+license="MIT"
+[[mods]]
+modId="unifiedsync"
+version="1.0.0"
+displayName="Unified Mod Sync"
+description='''Modular server-side player data synchronization, protection, backups and rollback.'''
+[[mixins]]
+config="unifiedsync.mixins.json"
+[[dependencies.unifiedsync]]
+modId="neoforge"
+type="required"
+versionRange="[21.1.251,21.2)"
+side="SERVER"
+[[dependencies.unifiedsync]]
+modId="minecraft"
+type="required"
+versionRange="[1.21.1]"
+side="SERVER"
+[[dependencies.unifiedsync]]
+modId="astralsync"
+type="incompatible"
+versionRange="[0,)"
+side="SERVER"
+reason="Disable the standalone Astral Sync; use Unified Mod Sync's astral module."

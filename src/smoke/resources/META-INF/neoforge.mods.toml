@@ -1,0 +1,7 @@
+modLoader="javafml"
+loaderVersion="[4,)"
+license="MIT"
+[[mods]]
+modId="ums_smoke"
+version="1.0.0"
+displayName="Unified Sync verification only"

@@ -1,0 +1,9 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.unifiedsync.mixin",
+  "plugin": "dev.unifiedsync.mixin.OptionalMixins",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": ["PacketGuardMixin", "CustomPayloadGuardMixin", "PlayerGuardMixin", "EntityGuardMixin", "AstralSaveMixin"],
+  "injectors": { "defaultRequire": 1 }
+}
