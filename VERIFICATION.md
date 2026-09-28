@@ -1,5 +1,15 @@
 # 验证记录
 
+## 1.0.4 跟随世界保存验证
+
+日期：2026-09-28。本地 NeoForge 21.1.251 与真实 MySQL。核对 [Youer 1.21.1 MinecraftServer 补丁](https://github.com/MohistMC/Youer/blob/1.21.1/patches/net/minecraft/server/MinecraftServer.java.patch)：其 autosavePeriod 控制的定期保存调用 saveEverything，再进入 saveAllChunks。钩子注入 saveAllChunks 的正常返回点，未读写 Youer 的私有计时字段，也未调用每世界的提前保存事件来假定全服完成。此源码核对不是实际 Youer 运行验证。
+
+开发模式 `build runSmoke` 通过，9 项普通 JUnit 用例通过、3 项独立数据库用例未启用，5 项 GameTest 全部通过。新增配置测试验证旧配置缺省 world、显式 interval 和错误模式拒绝。GameTest 通过真实 saveEverything/saveAllChunks 调用验证 Mixin 生效：world 模式不按独立计时触发、全世界 noSave 时不触发、连续世界保存只在前一笔之后写入最新检查点，且保存后的游戏修改不会污染已采集快照。继续验证 GUI 保持打开、资源交接保护、离服最新状态和写库失败保护。
+
+最终 1.0.4 JAR 的独立打包验证（MySQL + fakeredis TCP、父层 JDBC 驱动）5 项 GameTest 全部通过；切换开发配置为 interval 后再次运行，5 项也全部通过，运行结束已恢复本地 world 默认配置。
+
+非 flush 世界保存调用返回不表示全部区块已物理落盘；数据库后台提交与其也没有原子性。本次未进行生产服务端强杀/断电测试或实际客户端双服联测。
+
 ## 1.0.3 自动保存 GUI 修复验证
 
 日期：2026-09-28。本地真实 NeoForge / MySQL 测试，没有操作正式服务器。

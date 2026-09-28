@@ -4,7 +4,7 @@ plugins {
     id 'com.gradleup.shadow' version '8.3.6'
 }
 group = 'dev.unifiedsync'
-version = '1.0.3'
+version = '1.0.4'
 base { archivesName = 'unified-mod-sync-neoforge-1.21.1' }
 java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 repositories {

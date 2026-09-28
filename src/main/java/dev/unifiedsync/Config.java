@@ -23,6 +23,7 @@ public record Config(
     int delay,
     int loadTimeout,
     int autosave,
+    boolean worldSave,
     int backups,
     int maxBags,
     int maxDepth,
@@ -47,6 +48,9 @@ public record Config(
     String ktg = p.getProperty("ktg-mode", "auto");
     if (!Set.of("auto", "required", "off").contains(ktg))
       throw new IllegalArgumentException("Invalid ktg-mode");
+    String saveMode = p.getProperty("autosave-mode", "world");
+    if (!Set.of("world", "interval").contains(saveMode))
+      throw new IllegalArgumentException("Invalid autosave-mode");
     return new Config(
         bool(p, "enabled", false),
         p.getProperty("server-id", "server"),
@@ -66,6 +70,7 @@ public record Config(
         num(p, "join-delay-seconds", 5, 0, 600),
         num(p, "load-timeout-seconds", 120, 10, 1800),
         num(p, "autosave-seconds", 60, 5, 3600),
+        saveMode.equals("world"),
         num(p, "backup-count", 10, 2, 100),
         num(p, "max-backpacks", 128, 1, 1024),
         num(p, "max-nesting-depth", 8, 1, 32),

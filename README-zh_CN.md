@@ -1,11 +1,11 @@
-# Unified Mod Sync 1.0.3
+# Unified Mod Sync 1.0.4
 
 服务端 NeoForge 1.21.1 统一同步模组。首批模块：精妙背包内容、时装工坊衣柜、星辉研究和天赋进度。MySQL 必需，Redis 可选。放入 `mods`，不是 `plugins`；客户端不需要安装这个同步模组。
 
 ## 安装与配置
 
 1. 各子服使用同一套玩家 UUID 体系、模组版本、注册表和相关模组配置。数据库先创建一个空库，例如 `CREATE DATABASE unified_sync CHARACTER SET utf8mb4;`。账号需要该库的建表、查询、插入、更新、删除及升级表结构权限。
-2. 放入 `unified-mod-sync-neoforge-1.21.1-1.0.3.jar`。删除之前单独的 Astral Sync。停用 AWWardrobeSync；YouerModSync 可以保留其他功能，但必须关闭 `modules.sophisticatedbackpacks`。
+2. 放入 `unified-mod-sync-neoforge-1.21.1-1.0.4.jar`。删除之前单独的 Astral Sync。停用 AWWardrobeSync；YouerModSync 可以保留其他功能，但必须关闭 `modules.sophisticatedbackpacks`。
 3. 启动一次后自动生成 `config/unified-mod-sync.properties`。首次默认 `enabled=false`。正常情况下不用手动创建；也可以复制发行包的示例配置到上述位置。
 4. 停服，填写 MySQL 配置，设置 `enabled=true`。所有子服使用相同 `sync-group`，`server-id` 各不相同。只用 MySQL 时保留 `redis.enabled=false`，不需要 Redis 服务，也不需要额外放 JDBC/Jedis JAR。
 5. 与本次提供的 KTG4 + NMS 插件配合，建议 `ktg-mode=required`，`join-delay-seconds=5`。模组同时等待延迟和 KTG4 的 `Work.isLoaded()`，不是仅等待固定秒数。
@@ -23,6 +23,8 @@ mysql.password=填写密码
 redis.enabled=false
 join-delay-seconds=5
 ktg-mode=required
+autosave-mode=world
+# 仅 autosave-mode=interval 时使用
 autosave-seconds=60
 backup-count=10
 modules=wardrobe,backpacks,astral
@@ -35,7 +37,8 @@ modules=wardrobe,backpacks,astral
 | join-delay-seconds | 5 | 入服后至少等待的真实秒数 |
 | ktg-mode | auto | auto：检测到 KTG4 就等待；required：没有 KTG4 也拒绝放行；off：跳过 KTG4 就绪检查 |
 | load-timeout-seconds | 120 | 等待初始化、KTG4、旧服交接和加载的超时；超时保持保护 |
-| autosave-seconds | 60 | 自动保存间隔，5–3600 秒 |
+| autosave-mode | world | world：跟随服务端整服世界保存；interval：独立计时 |
+| autosave-seconds | 60 | 仅 interval 模式的自动保存间隔，5–3600 秒 |
 | backup-count | 10 | 每玩家、每模块保留最近 2–100 个检查点 |
 | lease-seconds | 90 | MySQL/Redis 租约有效期，30–600 秒 |
 | network-timeout-ms | 3000 | 单次连接及网络读写超时 |
@@ -75,6 +78,12 @@ Redis 开启后是额外的玩家会话协调层。其故障也会保护玩家�
 - `astral`：使用 `PlayerProgress.SAVE_CODEC` 保存完整进度，恢复时刷新天赋效果和客户端研究；不使用裁剪过的客户端共享格式。接管普通研究保存调度，离服结束后再清理缓存。
 
 正常自动保存先在主线程采集快照，再后台写库，不关闭 GUI，也不暂停玩家操作。写库期间仍检查租约和背包归属；若携带的背包 UUID 集合变化，会立即保护，并等待当前写入结束后再交接。离服会等待未完成的自动保存，再采集最新状态保存，避免丢失快照之后的修改。
+
+默认 `autosave-mode=world`：在服务端整服世界保存调用正常返回后，立即采集所有 READY 玩家启用模块的快照并后台写入。跟随实际服务端保存周期，不硬编码五分钟，也包括走整服保存路径的 `/save-all`。旧配置缺少这个选项时同样默认 world，原 `autosave-seconds` 不再触发独立定时保存。所有世界禁用保存且未强制保存时不触发；只保存单个世界的插件调用不属于此钩子的覆盖范围。
+
+同一玩家正在写库时，新世界保存只保留一份最新等待快照，上一笔完成后按顺序提交，避免堆积或旧快照覆盖新快照。正在加载、保护或交接的玩家不强行采集，保留原有加载完成、离服和停服最终保存流程。
+
+这里对齐的是**保存调用和快照采集时机**。非 flush 世界保存可能仍有异步磁盘写入，MySQL 也是后台提交；世界文件、KTG4 和 MySQL 不是一笔原子事务，不能保证断电/强杀时绝对一致。自动保存窗口更接近，但后续游戏行为及跨服交接仍可能晚于最近一次世界检查点。
 
 首次加载、资源交接、手动保存和回档期间会短暂保护并关闭打开的容器。保护时拦截移动、交互、攻击、丢弃、拾取、物品栏点击、创造物品、模组操作包及非白名单命令；玩家 tick 暂停，免疫正常伤害。网络保活和必要的握手包仍可处理。数据损坏/连接故障不会主动踢人，而是提示“请联系服务器管理员”。自动保存写入失败同样会进入保护状态。
 

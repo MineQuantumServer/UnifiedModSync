@@ -401,7 +401,15 @@ public class SmokeTests {
         .thenSucceed();
   }
 
-  @GameTest(template = "empty", timeoutTicks = 4000)
+  private static void triggerAutosave(Coordinator service, ServerPlayer p) {
+    if (service.config.worldSave()) p.getServer().saveEverything(true, false, false);
+    else {
+      service.session(p.getUUID()).lastSave = 0;
+      service.tick();
+    }
+  }
+
+  @GameTest(template = "empty", timeoutTicks = 4000, batch = "autosave-gui")
   public static void autosaveKeepsMenusOpenAndOrdersTransfersAndLogout(GameTestHelper h)
       throws Exception {
     List<Packet<?>> sent = new ArrayList<>();
@@ -420,6 +428,7 @@ public class SmokeTests {
     module.verify();
     var keys = module.discover(p);
     var bagKey = keys.iterator().next();
+    var expectedWorldSnapshot = new java.util.concurrent.atomic.AtomicReference<byte[]>();
     service.join(p);
     h.startSequence()
         .thenWaitUntil(
@@ -433,8 +442,26 @@ public class SmokeTests {
               var chest = net.minecraft.world.inventory.ChestMenu.threeRows(8, p.getInventory());
               p.containerMenu = chest;
               sent.clear();
-              session.lastSave = 0;
-              service.tick();
+              if (service.config.worldSave()) {
+                session.lastSave = 0;
+                service.tick();
+                h.assertTrue(!session.busy, "World mode must ignore independent timer");
+                var previous = new java.util.HashMap<ServerLevel, Boolean>();
+                p.getServer()
+                    .getAllLevels()
+                    .forEach(
+                        level -> {
+                          previous.put(level, level.noSave);
+                          level.noSave = true;
+                        });
+                try {
+                  p.getServer().saveAllChunks(true, false, false);
+                } finally {
+                  previous.forEach((level, noSave) -> level.noSave = noSave);
+                }
+                h.assertTrue(!session.busy, "Disabled world saving must not trigger SQL autosave");
+              }
+              triggerAutosave(service, p);
               h.assertTrue(
                   session.busy && session.state == Coordinator.State.READY,
                   "Autosave must write without freezing");
@@ -448,8 +475,41 @@ public class SmokeTests {
                       .noneMatch(packet -> packet instanceof ClientboundContainerClosePacket),
                   "Autosave sent a close packet");
             })
+        .thenExecute(
+            () -> {
+              if (!service.config.worldSave()) return;
+              try {
+                var inv =
+                    (IItemHandlerModifiable) wrapper.getMethod("getInventoryHandler").invoke(w);
+                inv.setStackInSlot(0, new ItemStack(Items.DIAMOND, 8));
+                triggerAutosave(service, p);
+                inv.setStackInSlot(0, new ItemStack(Items.DIAMOND, 9));
+                triggerAutosave(service, p);
+                expectedWorldSnapshot.set(module.capture(p, Set.of(bagKey)).get(bagKey));
+                inv.setStackInSlot(0, new ItemStack(Items.DIAMOND, 10));
+              } catch (Exception e) {
+                throw new RuntimeException(e);
+              }
+            })
         .thenWaitUntil(
             () -> h.assertTrue(!service.session(p.getUUID()).busy, "Awaiting chest autosave"))
+        .thenExecute(
+            () -> {
+              if (!service.config.worldSave()) return;
+              try {
+                var session = service.session(p.getUUID());
+                var latest =
+                    new dev.unifiedsync.store.MysqlStore(service.config)
+                        .acquire(session.uuid, session.token, Set.of(bagKey));
+                h.assertTrue(
+                    Arrays.equals(latest.get(bagKey), expectedWorldSnapshot.get()),
+                    "Queued save must preserve the latest world-save checkpoint, not later gameplay"
+                        + " state");
+                h.assertTrue(p.containerMenu != p.inventoryMenu, "Queued world save closed GUI");
+              } catch (Exception e) {
+                throw new RuntimeException(e);
+              }
+            })
         .thenExecute(
             () -> {
               try {
@@ -472,8 +532,7 @@ public class SmokeTests {
                 p.containerMenu = menu;
                 sent.clear();
                 var session = service.session(p.getUUID());
-                session.lastSave = 0;
-                service.tick();
+                triggerAutosave(service, p);
                 service.containerOpened(p, menu);
                 h.assertTrue(
                     p.containerMenu == menu && service.beforeAction(p),
@@ -504,8 +563,7 @@ public class SmokeTests {
               try {
                 h.assertTrue(module.discover(p).size() == 2, "New bag was not loaded");
                 var session = service.session(p.getUUID());
-                session.lastSave = 0;
-                service.tick();
+                triggerAutosave(service, p);
                 ((IItemHandlerModifiable) wrapper.getMethod("getInventoryHandler").invoke(w))
                     .setStackInSlot(0, new ItemStack(Items.EMERALD, 13));
                 service.logout(p);
@@ -544,7 +602,7 @@ public class SmokeTests {
         .thenSucceed();
   }
 
-  @GameTest(template = "empty", timeoutTicks = 4000)
+  @GameTest(template = "empty", timeoutTicks = 4000, batch = "autosave-failure")
   public static void autosaveFailureKeepsProtection(GameTestHelper h) {
     ServerPlayer p = player(h, "AutosaveFailure");
     Coordinator service = UnifiedSync.service();
@@ -566,8 +624,7 @@ public class SmokeTests {
               } catch (Exception e) {
                 throw new RuntimeException(e);
               }
-              session.lastSave = 0;
-              service.tick();
+              triggerAutosave(service, p);
             })
         .thenWaitUntil(
             () ->

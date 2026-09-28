@@ -41,6 +41,7 @@ public final class Coordinator implements AutoCloseable {
     public int generation, rounds;
     public final Object ioLock = new Object();
     public Set<ResourceKey> owned = new TreeSet<>();
+    private Map<String, Map<ResourceKey, byte[]>> queuedWorldSave;
 
     Session(ServerPlayer p) {
       player = p;
@@ -214,7 +215,10 @@ public final class Coordinator implements AutoCloseable {
           if (ticks % 20 == 0 && !KtgGate.ready(s.player, config))
             throw new IllegalStateException(
                 "KTG4 started another inventory load; retry when complete");
-          if (checkResources(s) && !s.busy && seconds(s.lastSave) >= config.autosave()) autosave(s);
+          if (checkResources(s)
+              && !s.busy
+              && !config.worldSave()
+              && seconds(s.lastSave) >= config.autosave()) autosave(s);
         } catch (Exception e) {
           fail(s, e);
         }
@@ -309,6 +313,7 @@ public final class Coordinator implements AutoCloseable {
   }
 
   private void freeze(Session s, State state) {
+    s.queuedWorldSave = null;
     s.anchor = s.player.position();
     s.state = state;
     s.player.closeContainer();
@@ -531,11 +536,36 @@ public final class Coordinator implements AutoCloseable {
   private void autosave(Session s) throws Exception {
     // Capture detached byte arrays on the server thread. The player may keep using the same
     // leased resources while this point-in-time snapshot is written. Do not apply it back.
-    var data = split(capture(s, s.owned), modules.keySet());
+    backgroundSave(s, split(capture(s, s.owned), modules.keySet()), "autosave");
+  }
+
+  /** Main-thread hook after a successful whole-server world-save call. */
+  public void worldSaved() {
+    if (!active() || stopping || !config.worldSave()) return;
+    if (!server.isSameThread())
+      throw new IllegalStateException("World save must run on server thread");
+    for (Session s : List.copyOf(sessions.values())) {
+      if (s.closing || s.state != State.READY) continue;
+      try {
+        if (seconds(s.lastLease) >= config.lease() / 2)
+          throw new IllegalStateException("Lease confirmation overdue");
+        if (!checkResources(s)) continue;
+        var snapshot = split(capture(s, s.owned), modules.keySet());
+        // At most one queued world checkpoint per player; later world saves supersede it.
+        if (s.busy) s.queuedWorldSave = snapshot;
+        else backgroundSave(s, snapshot, "world-save");
+      } catch (Exception e) {
+        fail(s, e);
+      }
+    }
+  }
+
+  private void backgroundSave(
+      Session s, Map<String, Map<ResourceKey, byte[]>> data, String reason) {
     async(
         s,
         () -> {
-          db.save(s.uuid, s.token, data, "autosave", Set.of());
+          db.save(s.uuid, s.token, data, reason, Set.of());
           return null;
         },
         v -> {
@@ -543,7 +573,12 @@ public final class Coordinator implements AutoCloseable {
           if (s.state == State.SAVING) s.state = State.READY;
           // async's generation fence prevents a failed session from being reactivated here.
           // Logout waits for busy=false and captures the latest data before releasing leases.
-          if (!s.closing) checkResources(s);
+          if (s.closing) s.queuedWorldSave = null;
+          else if (checkResources(s) && !s.busy && s.queuedWorldSave != null) {
+            var queued = s.queuedWorldSave;
+            s.queuedWorldSave = null;
+            backgroundSave(s, queued, "world-save");
+          }
         });
   }
 
@@ -692,6 +727,7 @@ public final class Coordinator implements AutoCloseable {
   private void fail(Session s, Exception e) {
     if (s.state == State.BYPASS) return;
     s.generation++;
+    s.queuedWorldSave = null;
     s.state = State.ERROR;
     s.error = brief(e);
     s.anchor = s.player.position();

@@ -4,6 +4,6 @@
   "package": "dev.unifiedsync.mixin",
   "plugin": "dev.unifiedsync.mixin.OptionalMixins",
   "compatibilityLevel": "JAVA_21",
-  "mixins": ["PacketGuardMixin", "CustomPayloadGuardMixin", "PlayerGuardMixin", "EntityGuardMixin", "AstralSaveMixin"],
+  "mixins": ["PacketGuardMixin", "CustomPayloadGuardMixin", "PlayerGuardMixin", "EntityGuardMixin", "AstralSaveMixin", "WorldSaveMixin"],
   "injectors": { "defaultRequire": 1 }
 }
