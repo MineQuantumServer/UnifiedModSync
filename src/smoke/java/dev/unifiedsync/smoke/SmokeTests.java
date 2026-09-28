@@ -400,4 +400,191 @@ public class SmokeTests {
                     service.session(p.getUUID()) == null, "Awaiting released session cleanup"))
         .thenSucceed();
   }
+
+  @GameTest(template = "empty", timeoutTicks = 4000)
+  public static void autosaveKeepsMenusOpenAndOrdersTransfersAndLogout(GameTestHelper h)
+      throws Exception {
+    List<Packet<?>> sent = new ArrayList<>();
+    ServerPlayer p = player(h, "AutosaveGui", sent);
+    Coordinator service = UnifiedSync.service();
+    var bagItem =
+        BuiltInRegistries.ITEM.get(ResourceLocation.parse("sophisticatedbackpacks:backpack"));
+    ItemStack bag = new ItemStack(bagItem);
+    p.getInventory().setItem(0, bag);
+    Class<?> wrapper =
+        Class.forName("net.p3pp3rf1y.sophisticatedbackpacks.backpack.wrapper.BackpackWrapper");
+    Object w = wrapper.getMethod("fromStack", ItemStack.class).invoke(null, bag);
+    ((IItemHandlerModifiable) wrapper.getMethod("getInventoryHandler").invoke(w))
+        .setStackInSlot(0, new ItemStack(Items.DIAMOND, 7));
+    var module = new BackpackModule(service.config);
+    module.verify();
+    var keys = module.discover(p);
+    var bagKey = keys.iterator().next();
+    service.join(p);
+    h.startSequence()
+        .thenWaitUntil(
+            () ->
+                h.assertTrue(
+                    service.session(p.getUUID()).state == Coordinator.State.READY,
+                    "Awaiting autosave join"))
+        .thenExecute(
+            () -> {
+              var session = service.session(p.getUUID());
+              var chest = net.minecraft.world.inventory.ChestMenu.threeRows(8, p.getInventory());
+              p.containerMenu = chest;
+              sent.clear();
+              session.lastSave = 0;
+              service.tick();
+              h.assertTrue(
+                  session.busy && session.state == Coordinator.State.READY,
+                  "Autosave must write without freezing");
+              h.assertTrue(
+                  !service.protectedPlayer(p) && service.beforeAction(p),
+                  "Autosave blocked normal interaction");
+              service.containerOpened(p, chest);
+              h.assertTrue(p.containerMenu == chest, "Autosave closed ordinary GUI");
+              h.assertTrue(
+                  sent.stream()
+                      .noneMatch(packet -> packet instanceof ClientboundContainerClosePacket),
+                  "Autosave sent a close packet");
+            })
+        .thenWaitUntil(
+            () -> h.assertTrue(!service.session(p.getUUID()).busy, "Awaiting chest autosave"))
+        .thenExecute(
+            () -> {
+              try {
+                var contextType =
+                    Class.forName(
+                        "net.p3pp3rf1y.sophisticatedbackpacks.common.gui.BackpackContext");
+                Object context =
+                    Class.forName(contextType.getName() + "$Item")
+                        .getConstructor(String.class, int.class)
+                        .newInstance("main", 0);
+                var menu =
+                    (net.minecraft.world.inventory.AbstractContainerMenu)
+                        Class.forName(
+                                "net.p3pp3rf1y.sophisticatedbackpacks.common.gui.BackpackContainer")
+                            .getConstructor(
+                                int.class,
+                                net.minecraft.world.entity.player.Player.class,
+                                contextType)
+                            .newInstance(9, p, context);
+                p.containerMenu = menu;
+                sent.clear();
+                var session = service.session(p.getUUID());
+                session.lastSave = 0;
+                service.tick();
+                service.containerOpened(p, menu);
+                h.assertTrue(
+                    p.containerMenu == menu && service.beforeAction(p),
+                    "Autosave closed or blocked backpack GUI");
+                h.assertTrue(
+                    sent.stream()
+                        .noneMatch(packet -> packet instanceof ClientboundContainerClosePacket),
+                    "Backpack autosave sent a close packet");
+                // A different UUID appearing while IO is pending must still be protected
+                // immediately.
+                p.getInventory().setItem(1, new ItemStack(bagItem));
+                h.assertTrue(
+                    !service.beforeAction(p) && service.protectedPlayer(p),
+                    "New bag bypassed protection during autosave");
+                h.assertTrue(session.busy, "Ownership transfer overlapped pending write");
+              } catch (Exception e) {
+                throw new RuntimeException(e);
+              }
+            })
+        .thenWaitUntil(
+            () ->
+                h.assertTrue(
+                    service.session(p.getUUID()).state == Coordinator.State.READY
+                        && !service.session(p.getUUID()).busy,
+                    "Awaiting ordered ownership transfer: " + service.session(p.getUUID()).error))
+        .thenExecute(
+            () -> {
+              try {
+                h.assertTrue(module.discover(p).size() == 2, "New bag was not loaded");
+                var session = service.session(p.getUUID());
+                session.lastSave = 0;
+                service.tick();
+                ((IItemHandlerModifiable) wrapper.getMethod("getInventoryHandler").invoke(w))
+                    .setStackInSlot(0, new ItemStack(Items.EMERALD, 13));
+                service.logout(p);
+                h.assertTrue(session.busy, "Logout must wait for pending autosave");
+              } catch (Exception e) {
+                throw new RuntimeException(e);
+              }
+            })
+        .thenWaitUntil(
+            () ->
+                h.assertTrue(
+                    service.session(p.getUUID()) == null, "Awaiting latest logout snapshot"))
+        .thenExecute(
+            () -> {
+              var store = new dev.unifiedsync.store.MysqlStore(service.config);
+              UUID reader = UUID.randomUUID();
+              String token = UUID.randomUUID().toString();
+              try {
+                store.claim(reader, token);
+                var latest = store.acquire(reader, token, Set.of(bagKey));
+                var expected = module.capture(p, Set.of(bagKey));
+                h.assertTrue(
+                    Arrays.equals(latest.get(bagKey), expected.get(bagKey)),
+                    "Logout lost changes made after autosave capture");
+              } catch (Exception e) {
+                throw new RuntimeException(e);
+              } finally {
+                try {
+                  store.release(reader, token);
+                } catch (Exception e) {
+                  throw new RuntimeException(e);
+                }
+              }
+              module.detached(p);
+            })
+        .thenSucceed();
+  }
+
+  @GameTest(template = "empty", timeoutTicks = 4000)
+  public static void autosaveFailureKeepsProtection(GameTestHelper h) {
+    ServerPlayer p = player(h, "AutosaveFailure");
+    Coordinator service = UnifiedSync.service();
+    service.join(p);
+    h.startSequence()
+        .thenWaitUntil(
+            () ->
+                h.assertTrue(
+                    service.session(p.getUUID()).state == Coordinator.State.READY,
+                    "Awaiting failure test join"))
+        .thenExecute(
+            () -> {
+              var session = service.session(p.getUUID());
+              try {
+                // Revoke this disposable session's SQL lease to force the actual background write
+                // to fail.
+                new dev.unifiedsync.store.MysqlStore(service.config)
+                    .release(session.uuid, session.token);
+              } catch (Exception e) {
+                throw new RuntimeException(e);
+              }
+              session.lastSave = 0;
+              service.tick();
+            })
+        .thenWaitUntil(
+            () ->
+                h.assertTrue(
+                    service.session(p.getUUID()).state == Coordinator.State.ERROR,
+                    "Write failure must enter ERROR"))
+        .thenExecute(
+            () -> {
+              h.assertTrue(
+                  service.protectedPlayer(p) && !service.beforeAction(p),
+                  "Failed autosave allowed interactions");
+              service.logout(p);
+            })
+        .thenWaitUntil(
+            () ->
+                h.assertTrue(
+                    service.session(p.getUUID()) == null, "Awaiting failed session cleanup"))
+        .thenSucceed();
+  }
 }

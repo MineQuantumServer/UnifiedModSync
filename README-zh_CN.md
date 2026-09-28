@@ -1,11 +1,11 @@
-# Unified Mod Sync 1.0.2
+# Unified Mod Sync 1.0.3
 
 服务端 NeoForge 1.21.1 统一同步模组。首批模块：精妙背包内容、时装工坊衣柜、星辉研究和天赋进度。MySQL 必需，Redis 可选。放入 `mods`，不是 `plugins`；客户端不需要安装这个同步模组。
 
 ## 安装与配置
 
 1. 各子服使用同一套玩家 UUID 体系、模组版本、注册表和相关模组配置。数据库先创建一个空库，例如 `CREATE DATABASE unified_sync CHARACTER SET utf8mb4;`。账号需要该库的建表、查询、插入、更新、删除及升级表结构权限。
-2. 放入 `unified-mod-sync-neoforge-1.21.1-1.0.2.jar`。删除之前单独的 Astral Sync。停用 AWWardrobeSync；YouerModSync 可以保留其他功能，但必须关闭 `modules.sophisticatedbackpacks`。
+2. 放入 `unified-mod-sync-neoforge-1.21.1-1.0.3.jar`。删除之前单独的 Astral Sync。停用 AWWardrobeSync；YouerModSync 可以保留其他功能，但必须关闭 `modules.sophisticatedbackpacks`。
 3. 启动一次后自动生成 `config/unified-mod-sync.properties`。首次默认 `enabled=false`。正常情况下不用手动创建；也可以复制发行包的示例配置到上述位置。
 4. 停服，填写 MySQL 配置，设置 `enabled=true`。所有子服使用相同 `sync-group`，`server-id` 各不相同。只用 MySQL 时保留 `redis.enabled=false`，不需要 Redis 服务，也不需要额外放 JDBC/Jedis JAR。
 5. 与本次提供的 KTG4 + NMS 插件配合，建议 `ktg-mode=required`，`join-delay-seconds=5`。模组同时等待延迟和 KTG4 的 `Work.isLoaded()`，不是仅等待固定秒数。
@@ -74,7 +74,9 @@ Redis 开启后是额外的玩家会话协调层。其故障也会保护玩家�
 - `backpacks`：保存 `BackpackStorage` 中按内容 UUID 索引的完整 CompoundTag；遍历玩家物品栏、末影箱、SB 注册的玩家携带位置（含相应集成）、光标持有物及普通容器组件中的嵌套物品；递归处理套娃背包。物品外壳及其数据组件仍由 KTG4 同步。
 - `astral`：使用 `PlayerProgress.SAVE_CODEC` 保存完整进度，恢复时刷新天赋效果和客户端研究；不使用裁剪过的客户端共享格式。接管普通研究保存调度，离服结束后再清理缓存。
 
-首次加载、资源交接、保存和回档期间会短暂保护并关闭打开的容器。保护时拦截移动、交互、攻击、丢弃、拾取、物品栏点击、创造物品、模组操作包及非白名单命令；玩家 tick 暂停，免疫正常伤害。网络保活和必要的握手包仍可处理。数据损坏/连接故障不会主动踢人，而是提示“请联系服务器管理员”。
+正常自动保存先在主线程采集快照，再后台写库，不关闭 GUI，也不暂停玩家操作。写库期间仍检查租约和背包归属；若携带的背包 UUID 集合变化，会立即保护，并等待当前写入结束后再交接。离服会等待未完成的自动保存，再采集最新状态保存，避免丢失快照之后的修改。
+
+首次加载、资源交接、手动保存和回档期间会短暂保护并关闭打开的容器。保护时拦截移动、交互、攻击、丢弃、拾取、物品栏点击、创造物品、模组操作包及非白名单命令；玩家 tick 暂停，免疫正常伤害。网络保活和必要的握手包仍可处理。数据损坏/连接故障不会主动踢人，而是提示“请联系服务器管理员”。自动保存写入失败同样会进入保护状态。
 
 每个玩家和每个背包 UUID 有独立租约；旧会话在锁过期或被替换后不能写库。正常交接等待旧服完成最后保存并释放。异常关服时可能要等待租约过期。无法完成最后保存时，会尽力在世界目录 `unifiedsync-recovery/` 写恢复文件，供管理员排查；这些文件不会自动导入覆盖新服数据。
 

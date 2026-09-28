@@ -8,7 +8,7 @@ neoForge {
  mods { ums_smoke { sourceSet sourceSets.main } }
 }
 dependencies {
- implementation files('../../build/libs/unified-mod-sync-neoforge-1.21.1-1.0.2.jar')
+ implementation files('../../build/libs/unified-mod-sync-neoforge-1.21.1-1.0.3.jar')
  compileOnly('com.mysql:mysql-connector-j:8.4.0') { transitive = false }
  additionalRuntimeClasspath('com.mysql:mysql-connector-j:8.4.0') { transitive = false }
  runtimeOnly('hellfirepvp.astralsorcery:AstralSorcery:2.0.0.4') { transitive = false }

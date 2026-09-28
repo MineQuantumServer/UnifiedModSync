@@ -209,13 +209,12 @@ public final class Coordinator implements AutoCloseable {
         } catch (Exception e) {
           fail(s, e);
         }
-      } else if (s.state == State.READY && !s.busy) {
+      } else if (s.state == State.READY) {
         try {
           if (ticks % 20 == 0 && !KtgGate.ready(s.player, config))
             throw new IllegalStateException(
                 "KTG4 started another inventory load; retry when complete");
-          if (checkResources(s) && seconds(s.lastSave) >= config.autosave())
-            save(s, "all", "autosave", null);
+          if (checkResources(s) && !s.busy && seconds(s.lastSave) >= config.autosave()) autosave(s);
         } catch (Exception e) {
           fail(s, e);
         }
@@ -500,9 +499,15 @@ public final class Coordinator implements AutoCloseable {
   }
 
   private boolean checkResources(Session s) throws Exception {
-    if (s.busy || s.state != State.READY) return false;
+    if (s.state != State.READY) return false;
     Set<ResourceKey> current = discover(s);
     if (current.equals(s.owned)) return true;
+    if (s.busy) {
+      // Only background autosave may hold IO while READY. Block use of new resources now;
+      // its completion will reconcile ownership before another database operation starts.
+      freeze(s, State.SAVING);
+      return false;
+    }
     freeze(s, State.LOADING);
     s.joined = System.nanoTime();
     s.rounds = 0;
@@ -521,6 +526,25 @@ public final class Coordinator implements AutoCloseable {
           loadRound(s);
         });
     return false;
+  }
+
+  private void autosave(Session s) throws Exception {
+    // Capture detached byte arrays on the server thread. The player may keep using the same
+    // leased resources while this point-in-time snapshot is written. Do not apply it back.
+    var data = split(capture(s, s.owned), modules.keySet());
+    async(
+        s,
+        () -> {
+          db.save(s.uuid, s.token, data, "autosave", Set.of());
+          return null;
+        },
+        v -> {
+          s.lastSave = System.nanoTime();
+          if (s.state == State.SAVING) s.state = State.READY;
+          // async's generation fence prevents a failed session from being reactivated here.
+          // Logout waits for busy=false and captures the latest data before releasing leases.
+          if (!s.closing) checkResources(s);
+        });
   }
 
   public void save(Session s, String selected, String reason, Consumer<String> reply)
