@@ -1,11 +1,11 @@
-# Unified Mod Sync 1.0.4
+# Unified Mod Sync 1.0.5
 
 服务端 NeoForge 1.21.1 统一同步模组。首批模块：精妙背包内容、时装工坊衣柜、星辉研究和天赋进度。MySQL 必需，Redis 可选。放入 `mods`，不是 `plugins`；客户端不需要安装这个同步模组。
 
 ## 安装与配置
 
 1. 各子服使用同一套玩家 UUID 体系、模组版本、注册表和相关模组配置。数据库先创建一个空库，例如 `CREATE DATABASE unified_sync CHARACTER SET utf8mb4;`。账号需要该库的建表、查询、插入、更新、删除及升级表结构权限。
-2. 放入 `unified-mod-sync-neoforge-1.21.1-1.0.4.jar`。删除之前单独的 Astral Sync。停用 AWWardrobeSync；YouerModSync 可以保留其他功能，但必须关闭 `modules.sophisticatedbackpacks`。
+2. 放入 `unified-mod-sync-neoforge-1.21.1-1.0.5.jar`。删除之前单独的 Astral Sync。停用 AWWardrobeSync；YouerModSync 可以保留其他功能，但必须关闭 `modules.sophisticatedbackpacks`。
 3. 启动一次后自动生成 `config/unified-mod-sync.properties`。首次默认 `enabled=false`。正常情况下不用手动创建；也可以复制发行包的示例配置到上述位置。
 4. 停服，填写 MySQL 配置，设置 `enabled=true`。所有子服使用相同 `sync-group`，`server-id` 各不相同。只用 MySQL 时保留 `redis.enabled=false`，不需要 Redis 服务，也不需要额外放 JDBC/Jedis JAR。
 5. 与本次提供的 KTG4 + NMS 插件配合，建议 `ktg-mode=required`，`join-delay-seconds=5`。模组同时等待延迟和 KTG4 的 `Work.isLoaded()`，不是仅等待固定秒数。
@@ -85,7 +85,9 @@ Redis 开启后是额外的玩家会话协调层。其故障也会保护玩家�
 
 这里对齐的是**保存调用和快照采集时机**。非 flush 世界保存可能仍有异步磁盘写入，MySQL 也是后台提交；世界文件、KTG4 和 MySQL 不是一笔原子事务，不能保证断电/强杀时绝对一致。自动保存窗口更接近，但后续游戏行为及跨服交接仍可能晚于最近一次世界检查点。
 
-首次加载、资源交接、手动保存和回档期间会短暂保护并关闭打开的容器。保护时拦截移动、交互、攻击、丢弃、拾取、物品栏点击、创造物品、模组操作包及非白名单命令；玩家 tick 暂停，免疫正常伤害。网络保活和必要的握手包仍可处理。数据损坏/连接故障不会主动踢人，而是提示“请联系服务器管理员”。自动保存写入失败同样会进入保护状态。
+在普通箱子等容器中存取精妙背包时，资源交接保留窗口及鼠标光标上的物品。交接期间暂时拦截点击，成功后刷新当前容器并恢复操作；即使此前已有自动保存正在写库，也会等待该笔完成后再交接。精妙背包及 Sophisticated Core 自身的界面绑定内部物品处理器，恢复 NBT 可能替换这些处理器，这类界面仍会关闭。
+
+首次加载、手动保存和回档期间会短暂保护并关闭打开的容器。资源交接也会保护玩家，但仅在模块无法安全保留当前界面时关闭窗口。保护时拦截移动、交互、攻击、丢弃、拾取、物品栏点击、创造物品、模组操作包及非白名单命令；玩家 tick 暂停，免疫正常伤害。网络保活和必要的握手包仍可处理。数据损坏/连接故障不会主动踢人，而是提示“请联系服务器管理员”。自动保存写入失败同样会进入保护状态。
 
 每个玩家和每个背包 UUID 有独立租约；旧会话在锁过期或被替换后不能写库。正常交接等待旧服完成最后保存并释放。异常关服时可能要等待租约过期。无法完成最后保存时，会尽力在世界目录 `unifiedsync-recovery/` 写恢复文件，供管理员排查；这些文件不会自动导入覆盖新服数据。
 
@@ -116,6 +118,8 @@ Java 21：`gradlew.bat build`。使用 `build/libs/` 下没有 `unshaded-dev-onl
 模块接口是 `dev.unifiedsync.api.SyncModule`。新增模块实现 `id/requiredMod/verify/discover/capture/validate/apply`；玩家私有资源可继承 `PlayerModule`。模块业务方法只在服务器主线程执行，返回独立 byte[] 快照，不能把活的 NBT/物品对象交给数据库线程。共享物品必须以资源 UUID 作键，而非玩家 UUID。需要客户端请求资源的刷新应放到 `activated`，它在同步保护解除后调用；衣柜使用这个时机，避免刚发出的皮肤请求又被保护拦截。
 
 新增内置模块加入 Coordinator 的模块列表。外部扩展模组推荐在 common setup 时调用 `UnifiedSync.registerModule(MyModule::new)`，并声明对 unifiedsync 的依赖。也支持 Java ServiceLoader：提供 `META-INF/services/dev.unifiedsync.api.SyncModule`，每行一个无参公开实现类。之后在 `modules=` 中启用对应 ID。扩展必须验证依赖版本和存档格式；`validate` 应在修改游戏状态前拒绝损坏数据，异常交给保护状态处理。不要吞异常返回空白进度。含父子引用的数据需覆盖 `discover(player, loaded)`，只遍历已经加载父记录的子引用。
+
+资源 UUID 变化时，可通过 `canKeepContainerOpenDuringTransfer(player, menu)` 声明当前窗口可以安全保留。默认返回 false；仅在恢复资源不会使菜单引用的物品处理器失效时返回 true。此方法不解除同步保护，点击仍需等待交接结束。协调器只询问本次资源集合变化的模块，所有受影响模块同意才保留窗口。
 
 ## 已验证与待验收
 

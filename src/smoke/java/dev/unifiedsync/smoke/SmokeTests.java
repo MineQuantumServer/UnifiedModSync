@@ -548,6 +548,9 @@ public class SmokeTests {
                     !service.beforeAction(p) && service.protectedPlayer(p),
                     "New bag bypassed protection during autosave");
                 h.assertTrue(session.busy, "Ownership transfer overlapped pending write");
+                h.assertTrue(
+                    p.containerMenu == p.inventoryMenu,
+                    "Backpack's own handler-bound GUI must still close during transfer");
               } catch (Exception e) {
                 throw new RuntimeException(e);
               }
@@ -642,6 +645,213 @@ public class SmokeTests {
             () ->
                 h.assertTrue(
                     service.session(p.getUUID()) == null, "Awaiting failed session cleanup"))
+        .thenSucceed();
+  }
+
+  private static void chestClick(
+      ServerPlayer player, int slot, net.minecraft.world.inventory.ClickType type) {
+    var menu = player.containerMenu;
+    player.connection.handleContainerClick(
+        new ServerboundContainerClickPacket(
+            menu.containerId,
+            menu.getStateId(),
+            slot,
+            0,
+            type,
+            menu.getCarried().copy(),
+            new it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap<>()));
+  }
+
+  private static void assertTransferKeepsChest(
+      GameTestHelper h,
+      Coordinator service,
+      ServerPlayer player,
+      net.minecraft.world.inventory.ChestMenu chest,
+      List<Packet<?>> sent) {
+    h.assertTrue(
+        !service.beforeAction(player) && service.protectedPlayer(player),
+        "Transfer must protect before another action");
+    h.assertTrue(player.containerMenu == chest, "Backpack handoff closed the chest");
+    h.assertTrue(
+        sent.stream().noneMatch(packet -> packet instanceof ClientboundContainerClosePacket),
+        "Handoff sent a close-window packet");
+  }
+
+  @GameTest(template = "empty", timeoutTicks = 4000, batch = "chest-transfer")
+  public static void backpackChestTransfersKeepWindowAndProtectContents(GameTestHelper h)
+      throws Exception {
+    List<Packet<?>> sent = new ArrayList<>();
+    ServerPlayer player = player(h, "ChestTransfer", sent);
+    Coordinator service = UnifiedSync.service();
+    var bagItem =
+        BuiltInRegistries.ITEM.get(ResourceLocation.parse("sophisticatedbackpacks:backpack"));
+    ItemStack bag = new ItemStack(bagItem);
+    player.getInventory().setItem(0, bag);
+    Class<?> wrapper =
+        Class.forName("net.p3pp3rf1y.sophisticatedbackpacks.backpack.wrapper.BackpackWrapper");
+    Object w = wrapper.getMethod("fromStack", ItemStack.class).invoke(null, bag);
+    var inventory = (IItemHandlerModifiable) wrapper.getMethod("getInventoryHandler").invoke(w);
+    inventory.setStackInSlot(0, new ItemStack(Items.DIAMOND, 7));
+    var module = new BackpackModule(service.config);
+    module.verify();
+    var key = module.discover(player).iterator().next();
+    var expected = module.capture(player, Set.of(key)).get(key);
+    var contents = new net.minecraft.world.SimpleContainer(27);
+    var chest =
+        new java.util.concurrent.atomic.AtomicReference<net.minecraft.world.inventory.ChestMenu>();
+    service.join(player);
+    h.startSequence()
+        .thenWaitUntil(
+            () ->
+                h.assertTrue(
+                    service.session(player.getUUID()).state == Coordinator.State.READY
+                        && !service.session(player.getUUID()).busy,
+                    "Awaiting chest-transfer join"))
+        .thenExecute(
+            () -> {
+              player.openMenu(
+                  new net.minecraft.world.SimpleMenuProvider(
+                      (id, inv, p) ->
+                          net.minecraft.world.inventory.ChestMenu.threeRows(id, inv, contents),
+                      net.minecraft.network.chat.Component.literal("Transfer test")));
+              chest.set((net.minecraft.world.inventory.ChestMenu) player.containerMenu);
+              sent.clear();
+              // Put the backpack into a chest while an autosave is pending.
+              triggerAutosave(service, player);
+              chestClick(player, 54, net.minecraft.world.inventory.ClickType.QUICK_MOVE);
+              h.assertTrue(
+                  player.getInventory().getItem(0).isEmpty() && contents.getItem(0).is(bagItem),
+                  "Shift-click did not store the bag");
+              assertTransferKeepsChest(h, service, player, chest.get(), sent);
+              h.assertTrue(
+                  service.session(player.getUUID()).busy,
+                  "Transfer must wait for pending autosave");
+              chestClick(player, 0, net.minecraft.world.inventory.ClickType.QUICK_MOVE);
+              h.assertTrue(
+                  contents.getItem(0).is(bagItem),
+                  "Protected transfer accepted an inventory click");
+            })
+        .thenWaitUntil(
+            () ->
+                h.assertTrue(
+                    service.session(player.getUUID()).state == Coordinator.State.READY
+                        && !service.session(player.getUUID()).busy,
+                    "Awaiting deposit handoff: " + service.session(player.getUUID()).error))
+        .thenExecute(
+            () -> {
+              h.assertTrue(
+                  player.containerMenu == chest.get(), "Completed deposit replaced the chest");
+              h.assertTrue(
+                  !service.session(player.getUUID()).owned.contains(key),
+                  "Deposited bag lease was not released");
+              var db = new dev.unifiedsync.store.MysqlStore(service.config);
+              UUID reader = UUID.randomUUID();
+              String token = UUID.randomUUID().toString();
+              try {
+                db.claim(reader, token);
+                h.assertTrue(
+                    Arrays.equals(db.acquire(reader, token, Set.of(key)).get(key), expected),
+                    "Deposit failed to save bag contents");
+              } catch (Exception e) {
+                throw new RuntimeException(e);
+              } finally {
+                try {
+                  db.release(reader, token);
+                } catch (Exception e) {
+                  throw new RuntimeException(e);
+                }
+              }
+              // Make the local world copy stale to verify withdrawal reloads the SQL checkpoint.
+              try {
+                ((IItemHandlerModifiable) wrapper.getMethod("getInventoryHandler").invoke(w))
+                    .setStackInSlot(0, new ItemStack(Items.DIRT, 3));
+              } catch (Exception e) {
+                throw new RuntimeException(e);
+              }
+              sent.clear();
+              chestClick(player, 0, net.minecraft.world.inventory.ClickType.QUICK_MOVE);
+              h.assertTrue(contents.getItem(0).isEmpty(), "Shift-click did not withdraw the bag");
+              assertTransferKeepsChest(h, service, player, chest.get(), sent);
+            })
+        .thenWaitUntil(
+            () ->
+                h.assertTrue(
+                    service.session(player.getUUID()).state == Coordinator.State.READY
+                        && !service.session(player.getUUID()).busy,
+                    "Awaiting withdrawal handoff: " + service.session(player.getUUID()).error))
+        .thenExecute(
+            () -> {
+              int slot = -1;
+              for (int i = 0; i < chest.get().slots.size(); i++)
+                if (chest.get().getSlot(i).getItem().is(bagItem)) {
+                  slot = i;
+                  break;
+                }
+              h.assertTrue(slot >= 0, "Withdrawn bag missing from player slots");
+              try {
+                Object loaded =
+                    wrapper
+                        .getMethod("fromStack", ItemStack.class)
+                        .invoke(null, chest.get().getSlot(slot).getItem());
+                var restored =
+                    (IItemHandlerModifiable)
+                        wrapper.getMethod("getInventoryHandler").invoke(loaded);
+                h.assertTrue(
+                    restored.getStackInSlot(0).is(Items.DIAMOND)
+                        && restored.getStackInSlot(0).getCount() == 7,
+                    "Withdrawn bag exposed stale local contents");
+              } catch (Exception e) {
+                throw new RuntimeException(e);
+              }
+              sent.clear();
+              // Normal pickup/place, including a backpack on the cursor during database load.
+              chestClick(player, slot, net.minecraft.world.inventory.ClickType.PICKUP);
+              h.assertTrue(
+                  chest.get().getCarried().is(bagItem), "Pickup did not put bag on cursor");
+              chestClick(player, 0, net.minecraft.world.inventory.ClickType.PICKUP);
+              assertTransferKeepsChest(h, service, player, chest.get(), sent);
+            })
+        .thenWaitUntil(
+            () ->
+                h.assertTrue(
+                    service.session(player.getUUID()).state == Coordinator.State.READY
+                        && !service.session(player.getUUID()).busy,
+                    "Awaiting cursor deposit"))
+        .thenExecute(
+            () -> {
+              sent.clear();
+              chestClick(player, 0, net.minecraft.world.inventory.ClickType.PICKUP);
+              h.assertTrue(
+                  chest.get().getCarried().is(bagItem),
+                  "Chest pickup did not retain cursor backpack");
+              assertTransferKeepsChest(h, service, player, chest.get(), sent);
+              h.assertTrue(
+                  chest.get().getCarried().is(bagItem),
+                  "Protection returned or dropped cursor backpack");
+            })
+        .thenWaitUntil(
+            () ->
+                h.assertTrue(
+                    service.session(player.getUUID()).state == Coordinator.State.READY
+                        && !service.session(player.getUUID()).busy,
+                    "Awaiting cursor withdrawal"))
+        .thenExecute(
+            () -> {
+              h.assertTrue(
+                  player.containerMenu == chest.get() && chest.get().getCarried().is(bagItem),
+                  "Load changed GUI or cursor");
+              h.assertTrue(service.beforeAction(player), "Loaded transfer remained blocked");
+              chestClick(player, 54, net.minecraft.world.inventory.ClickType.PICKUP);
+              h.assertTrue(
+                  chest.get().getCarried().isEmpty()
+                      && player.getInventory().getItem(0).is(bagItem),
+                  "Normal clicks did not resume");
+              service.logout(player);
+            })
+        .thenWaitUntil(
+            () ->
+                h.assertTrue(service.session(player.getUUID()) == null, "Awaiting transfer logout"))
+        .thenExecute(() -> module.detached(player))
         .thenSucceed();
   }
 }

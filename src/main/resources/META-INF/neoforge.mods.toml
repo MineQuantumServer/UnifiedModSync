@@ -3,7 +3,7 @@ loaderVersion="[4,)"
 license="MIT"
 [[mods]]
 modId="unifiedsync"
-version="1.0.4"
+version="1.0.5"
 displayName="Unified Mod Sync"
 description='''Modular server-side player data synchronization, protection, backups and rollback.'''
 [[mixins]]

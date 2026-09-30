@@ -313,10 +313,26 @@ public final class Coordinator implements AutoCloseable {
   }
 
   private void freeze(Session s, State state) {
+    protect(s, state, true);
+  }
+
+  private void protect(Session s, State state, boolean closeContainer) {
     s.queuedWorldSave = null;
     s.anchor = s.player.position();
     s.state = state;
-    s.player.closeContainer();
+    if (closeContainer) s.player.closeContainer();
+  }
+
+  private void protectTransfer(Session s, State state, Set<ResourceKey> current) {
+    boolean keepOpen = true;
+    for (SyncModule module : modules.values()) {
+      if (!filter(current, module.id()).equals(filter(s.owned, module.id()))
+          && !module.canKeepContainerOpenDuringTransfer(s.player, s.player.containerMenu)) {
+        keepOpen = false;
+        break;
+      }
+    }
+    protect(s, state, !keepOpen);
   }
 
   private void startLoad(Session s) {
@@ -510,10 +526,10 @@ public final class Coordinator implements AutoCloseable {
     if (s.busy) {
       // Only background autosave may hold IO while READY. Block use of new resources now;
       // its completion will reconcile ownership before another database operation starts.
-      freeze(s, State.SAVING);
+      protectTransfer(s, State.SAVING, current);
       return false;
     }
-    freeze(s, State.LOADING);
+    protectTransfer(s, State.LOADING, current);
     s.joined = System.nanoTime();
     s.rounds = 0;
     Set<ResourceKey> removed = new TreeSet<>(s.owned);

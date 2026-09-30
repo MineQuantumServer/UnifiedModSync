@@ -19,7 +19,7 @@ public final class BackpackModule implements SyncModule {
   private Class<?> item, consumer;
   private Method from, uuid, handler, refresh, getStorage, getContents, setContents, provider, run;
   private Method upgrades, renderUpgrades, firstUpgradeSlot;
-  private Class<?> backpackMenu;
+  private Class<?> backpackMenu, storageMenu;
   private Field upgradeSlots;
   private final Map<UUID, ScanContext> scans = new HashMap<>();
 
@@ -76,6 +76,8 @@ public final class BackpackModule implements SyncModule {
         Class.forName("net.p3pp3rf1y.sophisticatedcore.upgrades.UpgradeHandler")
             .getMethod("setRenderUpgradeItems");
     backpackMenu = Class.forName(b + "common.gui.BackpackContainer");
+    storageMenu =
+        Class.forName("net.p3pp3rf1y.sophisticatedcore.common.gui.StorageContainerMenuBase");
     firstUpgradeSlot = backpackMenu.getMethod("getFirstUpgradeSlot");
     upgradeSlots = backpackMenu.getField("upgradeSlots");
     getStorage = s.getMethod("get");
@@ -179,6 +181,14 @@ public final class BackpackModule implements SyncModule {
   @Override
   public void activated(ServerPlayer p) {
     p.inventoryMenu.broadcastFullState();
+  }
+
+  @Override
+  public boolean canKeepContainerOpenDuringTransfer(
+      ServerPlayer p, net.minecraft.world.inventory.AbstractContainerMenu menu) {
+    // Ordinary container slots hold backpack shells, not their contents handler. Sophisticated
+    // menus retain inventory/upgrade handlers that onContentsNbtUpdated may invalidate.
+    return !storageMenu.isInstance(menu);
   }
 
   public Map<ResourceKey, byte[]> capture(ServerPlayer p, Set<ResourceKey> keys) throws Exception {

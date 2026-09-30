@@ -34,5 +34,15 @@ public interface SyncModule {
       ServerPlayer player, net.minecraft.world.inventory.AbstractContainerMenu menu)
       throws Exception {}
 
+  /**
+   * Opt in only when applying transferred resources cannot invalidate this menu's item handlers.
+   * The menu stays visible, but gameplay remains blocked until transfer completes. Called only when
+   * this module's resource IDs change. Unknown modules default to closing.
+   */
+  default boolean canKeepContainerOpenDuringTransfer(
+      ServerPlayer player, net.minecraft.world.inventory.AbstractContainerMenu menu) {
+    return false;
+  }
+
   default void detached(ServerPlayer player) throws Exception {}
 }

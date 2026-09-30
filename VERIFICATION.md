@@ -1,5 +1,19 @@
 # 验证记录
 
+## 1.0.5 箱子存取背包验证
+
+日期：2026-09-30。未操作正式服务器或生产数据库。
+
+新增 GameTest 通过 `ServerPlayer.openMenu` 打开真实 ChestMenu，并通过 `ServerGamePacketListenerImpl.handleContainerClick` 发送点击数据包，经过实际 Mixin 防护。测试覆盖：
+
+- 自动保存仍在写库时 Shift 点击存入背包：窗口保持同一个 ChestMenu，未发送 ClientboundContainerClosePacket；进入保护并拦截后续取出操作，原自动保存完成后再执行交接。
+- 存入完成后，另一个测试 SQL 会话能获得已释放的背包租约，且数据库内容与存入前一致。
+- 人为修改本地背包内容为旧数据，再 Shift 点击取出：窗口保持打开；加载完成后内容恢复为数据库的 7 个钻石。
+- 普通 PICKUP 存入、从箱子取到鼠标光标，均保持窗口；保护没有归还或丢弃光标背包，加载后能正常放回玩家物品栏。
+- 现有真实 BackpackContainer 测试增加断言，确认可能失效的内部处理器界面在交接时仍关闭。
+
+`build runSmoke` 通过，9 项普通单元测试通过、3 项独立数据库测试未启用；开发 GameTest 与最终打包 JAR 的 GameTest 各 6 项全部通过。开发环境使用真实 MySQL-only，打包环境使用真实 MySQL + fakeredis TCP 并加入父层 MySQL JDBC 驱动，验证隔离打包兼容性；fakeredis 不是实际 Redis 集群。测试连接为合成连接，用于检查服务端行为和发送的数据包；仍需在实际 Youer + KTG4 环境用客户端验收普通点击与 Shift 点击的连续存取。
+
 ## 1.0.4 跟随世界保存验证
 
 日期：2026-09-28。本地 NeoForge 21.1.251 与真实 MySQL。核对 [Youer 1.21.1 MinecraftServer 补丁](https://github.com/MohistMC/Youer/blob/1.21.1/patches/net/minecraft/server/MinecraftServer.java.patch)：其 autosavePeriod 控制的定期保存调用 saveEverything，再进入 saveAllChunks。钩子注入 saveAllChunks 的正常返回点，未读写 Youer 的私有计时字段，也未调用每世界的提前保存事件来假定全服完成。此源码核对不是实际 Youer 运行验证。
